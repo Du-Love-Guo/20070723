@@ -1,0 +1,870 @@
+<!--
+# 设计手记
+
+**如何用纯 CSS 实现“奶油体积感”**
+- 体积感来源于层叠径向渐变与阴影：蛋糕侧面用线性/径向渐变模拟光照渐变（高光 -> 中间体 -> 阴影），顶部用多重径向渐变模拟奶油堆高、刷痕与高光反射。边缘溢出糖霜由伪元素组成的半透明曲线（border-radius + transform）模拟流体张力并加上模糊阴影以呈现厚重感。
+- 高光通过在蛋糕顶部和侧面分别放置亮色径向渐变来强化，细节高光用小半透明椭圆（伪元素）叠加模拟奶油表面的镜面光。
+
+**如何实现火焰“动态扭曲”**
+- 使用内嵌 SVG 的 feTurbulence + feDisplacementMap 产生细节噪声，再用 feGaussianBlur 做柔化和 feColorMatrix 调整色温，最终通过 JS（GSAP）实时驱动 baseFrequency 与 scale，使火焰在“吹气”时产生被拉长和螺旋扭曲的效果。
+- 火焰光晕由半透明的 radialGradient + GaussianBlur 实现，和 SVG filter 协作以制造真实感的发光扩散。
+
+设计意图注释已写入代码中（// 或 /* */），便于你根据视觉偏好微调。
+
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>为 郭依琳 的沉浸式生日祝福</title>
+
+  <!-- Playfair Display 建议：可按需自行加载系统/网络字体；此处优先使用系统回退 -->
+  <style>
+    /* 全局重置 */
+    :root{
+      --bg:#0b0c0f;
+      --accent:#f6e8d9;
+      --muted:#9aa1a8;
+      --gold:#d9c9b6;
+      --warm:#ffdbb3;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--accent);font-family:Inter, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}
+    a{color:inherit}
+    /* 视窗容器 */
+    .stage{
+      position:relative;height:100vh;overflow:hidden;
+      perspective:1400px; /* 强化3D视觉 */
+      -webkit-perspective:1400px;
+      touch-action:none;
+    }
+
+    /* 顶部启幕：聚光灯中心文字 */
+    .curtain{
+      position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:60;
+      background:linear-gradient(180deg, rgba(10,10,12,1) 0%, rgba(9,9,11,0.98) 60%, rgba(6,6,8,1) 100%);
+      transition:opacity .6s ease;
+      will-change:opacity, transform;
+    }
+    .spot{
+      position:relative;padding:6vh 8vw; border-radius:18px;
+      transform:translateZ(40px);
+    }
+    .spot::before{
+      /* 聚光灯光斑：径向渐变制造柔和羽化 */
+      content:"";position:absolute;inset:-40%;filter:blur(60px);opacity:.95;
+      background:radial-gradient(ellipse at center, rgba(255,240,220,0.95) 0%, rgba(255,240,220,0.65) 18%, rgba(255,240,220,0.08) 35%, rgba(0,0,0,0) 65%);
+      z-index:-1;border-radius:50%;
+      will-change:transform, opacity;
+    }
+    .title{
+      font-family: "Playfair Display", Georgia, "Times New Roman", serif;
+      font-size:clamp(28px,6vw,64px);letter-spacing:0.12em;
+      color:#fff;text-align:center;
+      text-shadow:0 6px 24px rgba(0,0,0,0.7), 0 0 10px rgba(255,240,220,0.06);
+      filter:drop-shadow(0 8px 40px rgba(0,0,0,0.6));
+    }
+    .subtitle{margin-top:8px;color:var(--muted);font-size:14px;letter-spacing:.06em}
+
+    /* 幕布两侧板（用于拉开效果）*/
+    .panel{
+      position:absolute;top:0;bottom:0;width:50vw;background:linear-gradient(180deg, rgba(12,12,14,1), rgba(6,6,8,1));z-index:59;
+      pointer-events:none;will-change:transform;
+    }
+    .panel.left{left:0;transform-origin:left center}
+    .panel.right{right:0;transform-origin:right center}
+
+    /* 场景容器（3D 桌面）*/
+    .scene-wrap{
+      position:absolute;inset:0;display:flex;align-items:flex-end;justify-content:center;padding-bottom:10vh;pointer-events:auto;
+      transform-style:preserve-3d;will-change:transform;
+    }
+
+    /* 桌面（胡桃木）*/
+    .table{
+      width:min(880px,90%);height:240px;border-radius:18px;background:
+      /* 深色胡桃木纹理通过多层渐变合成 */
+      linear-gradient(180deg,#0f0906 0%, #1a0f0a 100%),
+      radial-gradient(1200px 200px at 20% 10%, rgba(255,255,255,0.02), transparent 8%),
+      linear-gradient(90deg, rgba(255,255,255,0.02), rgba(0,0,0,0));
+      box-shadow:0 30px 80px rgba(2,2,3,0.85), inset 0 -20px 60px rgba(0,0,0,0.6);
+      position:relative;transform:translateZ(0);will-change:transform, filter;
+      display:flex;align-items:center;justify-content:center;
+      /* 顶部柔光反射 */
+      overflow:visible;
+    }
+    .table::after{
+      /* 顶部柔光反射：长椭圆渐变 */
+      content:"";position:absolute;left:50%;top:12%;transform:translateX(-50%);width:80%;height:36%;
+      background:radial-gradient(ellipse at center, rgba(255,255,255,0.06), rgba(255,255,255,0.01) 40%, rgba(0,0,0,0));
+      pointer-events:none;border-radius:50%;
+      mix-blend-mode:soft-light;
+      will-change:opacity, transform;
+    }
+
+    /* 盘子：陶瓷釉面与接触阴影 */
+    .plate{
+      width:420px;height:140px;border-radius:50%;background:
+      /* 釉面光泽与边缘暗面 */
+      radial-gradient(circle at 30% 20%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.25) 6%, rgba(255,255,255,0.06) 10%, rgba(200,200,200,0.02) 20%, transparent 40%),
+      linear-gradient(180deg, #fff 0%, #f6f6f6 80%);
+      border:6px solid rgba(220,220,220,0.12);box-shadow:0 14px 30px rgba(2,2,3,0.6), inset 0 -6px 18px rgba(0,0,0,0.08);
+      position:relative;transform:translateZ(40px);will-change:transform, box-shadow;
+      display:flex;align-items:center;justify-content:center;
+    }
+    .plate::after{
+      /* 底部接触阴影 */
+      content:"";position:absolute;left:50%;bottom:-18px;transform:translateX(-50%);width:60%;height:28px;border-radius:50%;
+      background:radial-gradient(ellipse at center, rgba(0,0,0,0.45), rgba(0,0,0,0.12) 45%, transparent 80%);filter:blur(10px);
+      pointer-events:none;will-change:transform, opacity;
+    }
+
+    /* 蛋糕：利用多个层和伪元素构造体积感 */
+    .cake{
+      width:260px;height:120px;border-radius:140px/60px;position:relative;transform-style:preserve-3d;
+      will-change:transform;
+      /* 侧面主体：渐变模拟体积（高光->中间->暗面）*/
+      background:
+        linear-gradient(180deg, #fbf0e7 0%, #f6e6d9 30%, #e9d2c6 100%);
+      box-shadow:0 18px 40px rgba(0,0,0,0.55), inset 0 6px 14px rgba(255,255,255,0.08);
+      display:flex;align-items:center;justify-content:center;
+      overflow:visible;
+      transform:translateZ(80px) translateY(-8px) translateX(0);
+    }
+    /* 顶部奶油纹理 */
+    .cake .top{
+      position:absolute;left:50%;top:-20px;transform:translateX(-50%);width:240px;height:70px;border-radius:50%;
+      background:
+        radial-gradient(ellipse at 40% 20%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.88) 15%, rgba(255,250,245,0.7) 30%, rgba(250,240,230,0.45) 50%, transparent 70%),
+        linear-gradient(180deg, rgba(255,255,255,0.9), rgba(250,240,230,0.8));
+      box-shadow:0 6px 18px rgba(0,0,0,0.35);
+      /* 设计意图：顶部高光使用径向渐变叠加以模拟奶油刷痕 */
+      will-change:transform, opacity;
+      overflow:visible;
+    }
+    /* 糖霜溢出（伪元素若干） */
+    .cake .top::before, .cake .top::after{
+      content:"";position:absolute;left:10%;top:60%;width:80%;height:46px;border-radius:40px/24px;background:linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,250,245,0.94));
+      filter:blur(2px);transform:translateY(8px) rotateX(8deg);opacity:0.98;will-change:transform, opacity;
+      /* 此处溢出高度与模糊用于模拟奶油厚度 */
+    }
+    .cake .top::after{left:6%;top:72%;width:88%;height:38px;filter:blur(3px);opacity:0.95;transform:translateY(10px) rotateX(6deg)}
+
+    /* 蛋糕内部层（切开时露出）*/
+    .cake .inner{
+      position:absolute;left:50%;top:28px;transform:translateX(-50%);width:84%;height:56px;border-radius:40px/22px;overflow:visible;
+      background:linear-gradient(180deg,#fbe9e5 0%,#ffd9d4 100%);
+      box-shadow:inset 0 4px 10px rgba(255,255,255,0.06);
+      transform-origin:center;will-change:clip-path, transform;
+    }
+
+    /* 草莓装饰（仅作视觉提示） */
+    .berry{
+      position:absolute;width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 30% 25%, #fff 0%, #ff6b6b 18%, #d74141 60%);
+      box-shadow:0 4px 10px rgba(183,48,48,0.45);
+      transform:translateZ(18px);
+    }
+    .berry.b1{left:44%;top:-8%}
+    .berry.b2{left:54%;top:-6%}
+    .berry.b3{left:50%;top:-2%}
+
+    /* 蜡烛：竖向小柱 + SVG 火焰（细节在HTML中）*/
+    .candles{position:absolute;top:-30px;display:flex;gap:18px;left:50%;transform:translateX(-50%);will-change:transform}
+    .candle{
+      width:12px;height:48px;border-radius:6px;background:linear-gradient(180deg, rgba(255,255,255,0.15), rgba(255,255,255,0.06));
+      box-shadow:inset 0 3px 6px rgba(255,255,255,0.08), 0 6px 10px rgba(0,0,0,0.45);
+      display:flex;align-items:flex-start;justify-content:center;position:relative;transform-origin:center bottom;
+      will-change:transform, filter;
+      opacity:1;cursor:pointer;
+      backdrop-filter: blur(0.5px);
+      /* 半透明蜡体：微弱环境光透射 */
+      background-image: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.6)), linear-gradient(180deg,#ffeedd,#ffefdf);
+      mix-blend-mode:screen;
+    }
+    .candle .wick{position:absolute;top:-6px;width:2px;height:8px;background:#3b2c23;border-radius:1px;left:50%;transform:translateX(-50%);z-index:3}
+    .candle svg{position:relative;top:-12px;width:28px;height:48px;overflow:visible;pointer-events:none;will-change:filter, transform}
+
+    /* 气流模糊效果（熄灭时激活）*/
+    .gloom{position:fixed;inset:0;pointer-events:none;mix-blend-mode:overlay;filter:blur(0px);opacity:0;transition:opacity .8s ease, filter .8s ease;will-change:opacity, filter}
+    .gloom.active{opacity:1;filter:blur(6px)}
+
+    /* 餐刀（银色）*/
+    .knife{
+      position:absolute;top:8%;left:50%;transform:translateX(-50%) translateZ(140px) translateY(-200px) rotateX(8deg);
+      width:220px;height:14px;background:linear-gradient(90deg,#eef2f6 0%, #cfd6db 45%, #eef2f6 100%);
+      border-radius:6px;box-shadow:0 8px 26px rgba(0,0,0,0.5);
+      display:flex;align-items:center;justify-content:center;opacity:0;z-index:40;will-change:transform, opacity;
+    }
+    .knife::after{content:"";position:absolute;left:8px;right:8px;top:4px;height:3px;background:linear-gradient(90deg,rgba(255,255,255,0.7),rgba(255,255,255,0.05));border-radius:2px;pointer-events:none}
+    .knife .handle{position:absolute;right:6px;width:48px;height:10px;background:linear-gradient(90deg,#4a4a4a,#252525);border-radius:4px;transform:translateZ(20px)}
+
+    /* 信封与信纸（盘下）*/
+    .envelope{
+      position:absolute;left:50%;bottom:18px;transform:translateX(-50%) translateZ(60px);width:160px;height:100px;background:#7a2b1f;border-radius:6px;box-shadow:0 12px 36px rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:30;
+      will-change:transform;
+    }
+    .envelope .seal{position:absolute;width:48px;height:48px;border-radius:50%;background:linear-gradient(180deg,#5a1e12,#8e3a2a);box-shadow:0 4px 14px rgba(0,0,0,0.6)}
+    .paper{position:absolute;left:50%;bottom:12px;transform:translateX(-50%) translateY(120%);width:220px;height:0px;background:#fff;border-radius:2px;box-shadow:0 12px 40px rgba(0,0,0,0.45);overflow:hidden;z-index:20;will-change:height, transform}
+
+    /* 打字机效果文字容器 */
+    .message{
+      padding:28px 26px;color:#0b0c0f;font-family:Inter,Arial,Helvetica,sans-serif;line-height:1.8;font-size:18px;letter-spacing:0.02em;white-space:pre-wrap;
+      filter:contrast(1.02);
+      position:relative;
+    }
+    /* 墨迹晕染层（canvas overlay）*/
+    #inkCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply;opacity:0.9;filter:blur(0.6px)}
+
+    /* 星云背景（canvas） */
+    canvas#stars{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+
+    /* 交互提示 */
+    .hint{position:absolute;bottom:6vh;left:50%;transform:translateX(-50%);color:var(--muted);font-size:13px;z-index:70}
+
+    /* 小屏适配 */
+    @media (max-width:600px){
+      .plate{width:86vw;height:120px}
+      .cake{width:200px;height:96px}
+      .knife{width:160px}
+    }
+
+    /* 强制 GPU 提示（满足技术指标）*/
+    .will-gpu{will-change:transform, opacity;transform:translateZ(0)}
+  </style>
+
+  <!-- GSAP 3.12.0 和 Lenis -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.0/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.24/bundled/lenis.min.js"></script>
+</head>
+<body>
+  <div class="stage will-gpu" id="stage">
+    <!-- 星云与粒子 -->
+    <canvas id="stars"></canvas>
+
+    <!-- 启幕 / 聚光 -->
+    <div class="curtain" id="curtain">
+      <div class="spot will-gpu">
+        <div class="title">致 郭依琳</div>
+        <div class="subtitle">愿你被世界温柔以待 · Happy Birthday</div>
+      </div>
+      <div class="panel left"></div>
+      <div class="panel right"></div>
+    </div>
+
+    <!-- 气流模糊覆盖层 -->
+    <div class="gloom" id="gloom"></div>
+
+    <!-- 场景 -->
+    <div class="scene-wrap" id="scene">
+      <div class="table will-gpu" id="table">
+        <div class="plate will-gpu" id="plate">
+          <div class="cake will-gpu" id="cake">
+            <div class="top"></div>
+            <div class="inner" id="cakeInner"></div>
+            <div class="berry b1"></div>
+            <div class="berry b2"></div>
+            <div class="berry b3"></div>
+
+            <div class="candles" id="candles">
+              <!-- 三支蜡烛：事件绑定到 .candle -->
+              <div class="candle" data-index="0" role="button" tabindex="0">
+                <div class="wick"></div>
+                <!-- SVG 火焰：内嵌滤镜用于扭曲 -->
+                <svg viewBox="0 0 40 80" preserveAspectRatio="xMidYMid meet">
+                  <defs>
+                    <filter id="flameFilter">
+                      <!-- 噪声 -->
+                      <feTurbulence id="turb" baseFrequency="0.02 0.04" numOctaves="2" result="noise"/>
+                      <feDisplacementMap id="disp" in="SourceGraphic" in2="noise" scale="6" xChannelSelector="R" yChannelSelector="G"/>
+                      <feGaussianBlur stdDeviation="8" result="blur"/>
+                      <feColorMatrix values="1 0 0 0 0
+                                              0 1 0 0 0
+                                              0 0 1 0 0
+                                              0 0 0 0.9 0" />
+                    </filter>
+                    <radialGradient id="flameGradient" cx="50%" cy="20%">
+                      <stop offset="0%" stop-color="#fffacd" stop-opacity="1"/>
+                      <stop offset="20%" stop-color="#ffd26b" stop-opacity="0.95"/>
+                      <stop offset="50%" stop-color="#ff8a3d" stop-opacity="0.9"/>
+                      <stop offset="100%" stop-color="#d53b1d" stop-opacity="0.85"/>
+                    </radialGradient>
+                  </defs>
+                  <!-- 火焰主体：多个层次叠加，配合 filter 动态 -->
+                  <g filter="url(#flameFilter)" id="flameGroup" transform="translate(6,2)">
+                    <path id="flameCore" d="M14 60 C 6 44, 8 26, 14 20 C 20 14, 26 24, 24 36 C 22 48, 16 60, 14 60 Z" fill="url(#flameGradient)" opacity="0.95"/>
+                    <path d="M12 66 C 8 52, 10 36, 14 30 C 18 24, 24 36, 22 48 C 21 56, 14 66, 12 66 Z" fill="rgba(255,245,220,0.18)"/>
+                  </g>
+                </svg>
+              </div>
+
+              <div class="candle" data-index="1" role="button" tabindex="0">
+                <div class="wick"></div>
+                <svg viewBox="0 0 40 80" preserveAspectRatio="xMidYMid meet">
+                  <g filter="url(#flameFilter)" transform="translate(6,2)">
+                    <path d="M14 60 C 6 44, 8 26, 14 20 C 20 14, 26 24, 24 36 C 22 48, 16 60, 14 60 Z" fill="url(#flameGradient)" opacity="0.95"/>
+                    <path d="M12 66 C 8 52, 10 36, 14 30 C 18 24, 24 36, 22 48 C 21 56, 14 66, 12 66 Z" fill="rgba(255,245,220,0.18)"/>
+                  </g>
+                </svg>
+              </div>
+
+              <div class="candle" data-index="2" role="button" tabindex="0">
+                <div class="wick"></div>
+                <svg viewBox="0 0 40 80" preserveAspectRatio="xMidYMid meet">
+                  <g filter="url(#flameFilter)" transform="translate(6,2)">
+                    <path d="M14 60 C 6 44, 8 26, 14 20 C 20 14, 26 24, 24 36 C 22 48, 16 60, 14 60 Z" fill="url(#flameGradient)" opacity="0.95"/>
+                    <path d="M12 66 C 8 52, 10 36, 14 30 C 18 24, 24 36, 22 48 C 21 56, 14 66, 12 66 Z" fill="rgba(255,245,220,0.18)"/>
+                  </g>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- 盘下信封 -->
+          <div class="envelope will-gpu" id="envelope" title="查看信件">
+            <div class="seal"></div>
+          </div>
+
+        </div>
+
+        <!-- 餐刀 -->
+        <div class="knife will-gpu" id="knife">
+          <div style="font-size:13px;color:#333;opacity:.8">Silver Knife</div>
+          <div class="handle"></div>
+        </div>
+
+        <!-- 信纸（将被抽出） -->
+        <div class="paper will-gpu" id="paper">
+          <canvas id="inkCanvas"></canvas>
+          <div class="message" id="message"></div>
+        </div>
+      </div>
+      <div class="hint" id="hint">上滑开启仪式 · 长按蜡烛或对着屏幕吹气可吹灭</div>
+    </div>
+  </div>
+
+  <audio id="clothSound" preload="auto">
+    <!-- 纯 JS 合成替代实际音效：留空由 AudioContext 动态合成 -->
+  </audio>
+
+  <script>
+    // -------------- 全局变量与工具 initialization --------------
+    // GSAP 和 Lenis 已经通过 script 引入
+    const gsapInstance = gsap; // 设计意图：统一使用 gsap 变量引用
+    const lenis = new Lenis({
+      duration: 1.2, // 平滑滚动
+      easing: t => 1 - Math.pow(1 - t, 3),
+      orientation: 'vertical'
+    });
+    function raf(time){
+      lenis.raf(time);
+      requestAnimationFrame(raf);
+    }
+    requestAnimationFrame(raf);
+
+    // 节点引用
+    const curtain = document.getElementById('curtain');
+    const leftPanel = document.querySelector('.panel.left');
+    const rightPanel = document.querySelector('.panel.right');
+    const scene = document.getElementById('scene');
+    const table = document.getElementById('table');
+    const cake = document.getElementById('cake');
+    const candles = document.getElementById('candles');
+    const gloom = document.getElementById('gloom');
+    const knife = document.getElementById('knife');
+    const envelope = document.getElementById('envelope');
+    const paper = document.getElementById('paper');
+    const message = document.getElementById('message');
+    const starCanvas = document.getElementById('stars');
+    const inkCanvas = document.getElementById('inkCanvas');
+    const hint = document.getElementById('hint');
+
+    // 设计意图：使用 will-change/translateZ(0) 来强制 GPU 加速（见 CSS）
+    // 状态
+    let opened=false;
+    let flamesOn=true;
+    let cuts=0;
+    const totalCuts = 3;
+
+    // -------------- 星云与烟粒子（canvas）--------------
+    // 设计意图：使用 canvas 绘制可控、轻量的星云与烟雾粒子，避免外部图片
+    function resizeCanvas(canvas){
+      canvas.width = canvas.clientWidth * devicePixelRatio;
+      canvas.height = canvas.clientHeight * devicePixelRatio;
+    }
+    // 星云
+    const sctx = starCanvas.getContext('2d');
+    function initStars(){
+      resizeCanvas(starCanvas);
+      const w = starCanvas.width, h = starCanvas.height;
+      // 画渐变星云背景
+      const g = sctx.createLinearGradient(0,0,0,h);
+      g.addColorStop(0,'rgba(12,10,15,0.6)');
+      g.addColorStop(1,'rgba(2,3,6,0.85)');
+      sctx.fillStyle = g;
+      sctx.fillRect(0,0,w,h);
+      // 绘制一些柔和光晕
+      for(let i=0;i<120;i++){
+        const x = Math.random()*w, y = Math.random()*h;
+        const r = (Math.random()*120 + 40) * devicePixelRatio;
+        const grd = sctx.createRadialGradient(x,y,0,x,y,r);
+        const alpha = Math.random()*0.12 + 0.02;
+        grd.addColorStop(0, `rgba(255,240,230,${alpha})`);
+        grd.addColorStop(1, 'rgba(0,0,0,0)');
+        sctx.fillStyle = grd;
+        sctx.fillRect(x-r,y-r,r*2,r*2);
+      }
+      // 远处微小星点
+      for(let i=0;i<400;i++){
+        sctx.fillStyle = `rgba(255,255,255,${Math.random()*0.9})`;
+        const x=Math.random()*w, y=Math.random()*h;
+        sctx.fillRect(x,y,Math.random()*1.8,Math.random()*1.8);
+      }
+    }
+    // 烟雾粒子 canvas 用于吹灭后的烟
+    const smokeCanvas = document.createElement('canvas');
+    smokeCanvas.style.position='absolute';
+    smokeCanvas.style.left='0';smokeCanvas.style.top='0';smokeCanvas.style.pointerEvents='none';smokeCanvas.style.zIndex=50;
+    document.body.appendChild(smokeCanvas);
+    const smokeCtx = smokeCanvas.getContext('2d');
+    function initSmoke(){
+      resizeCanvas(smokeCanvas);
+      smokeCanvas.width = document.documentElement.clientWidth * devicePixelRatio;
+      smokeCanvas.height = document.documentElement.clientHeight * devicePixelRatio;
+    }
+    function emitSmoke(x,y){
+      // 设计意图：发射一小缕青烟（淡蓝灰），持续帧动画衰减
+      const particles = [];
+      for(let i=0;i<28;i++){
+        particles.push({
+          x:x*devicePixelRatio + (Math.random()-0.5)*30,
+          y:y*devicePixelRatio + (Math.random()-0.5)*10,
+          vx:(Math.random()-0.5)*0.6,
+          vy:-1 - Math.random()*1.2,
+          life:100 + Math.random()*80,
+          r:6 + Math.random()*12,
+          a:0.9*Math.random()
+        });
+      }
+      let frame=0;
+      function tick(){
+        resizeCanvas(smokeCanvas);
+        smokeCtx.clearRect(0,0,smokeCanvas.width, smokeCanvas.height);
+        let alive=false;
+        for(let p of particles){
+          if(p.life>0){
+            alive=true;
+            p.x += p.vx; p.y += p.vy; p.vy -= 0.01; p.life -= 1;
+            const g = smokeCtx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r);
+            g.addColorStop(0, `rgba(183,200,210,${p.a*0.6})`);
+            g.addColorStop(1, `rgba(160,170,180,0)`);
+            smokeCtx.fillStyle = g;
+            smokeCtx.beginPath(); smokeCtx.arc(p.x,p.y,p.r,0,Math.PI*2); smokeCtx.fill();
+          }
+        }
+        if(alive && frame < 180){ frame++; requestAnimationFrame(tick) }
+        else { smokeCtx.clearRect(0,0,smokeCanvas.width, smokeCanvas.height) }
+      }
+      tick();
+    }
+
+    // -------------- 光影/启幕动画 --------------
+    // 设计意图：启幕为“幕布拉开” + 布料摩擦音（用 WebAudio 生成噪声短促音）
+    function playCloth(){
+      try{
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // 生成短噪声并包络以模拟布料摩擦
+        const bufferSize = ctx.sampleRate * 0.18;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for(let i=0;i<bufferSize;i++){
+          data[i] = (Math.random()*2-1) * Math.exp(-5 * i / bufferSize) * 0.3;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        const gain = ctx.createGain(); gain.gain.value = 0.9;
+        src.connect(gain); gain.connect(ctx.destination);
+        src.start(0);
+      }catch(e){ /* 安全降级 */ }
+    }
+
+    function openCurtain(){
+      if(opened) return; opened=true;
+      playCloth();
+      // 幕布两侧拉开动画（设计意图：模仿布料向侧边迅速拉）
+      gsapInstance.timeline()
+        .to(leftPanel, {duration:0.9, x: '-120%', ease:'power3.inOut'}, 0)
+        .to(rightPanel, {duration:0.9, x: '120%', ease:'power3.inOut'}, 0)
+        .to(curtain, {duration:0.9, opacity:0, pointerEvents:'none', onComplete:()=>{curtain.style.display='none'}}, 0.06)
+        // 桌面与镜头滑入
+        .fromTo(table, {y:120, rotateX:10, scale:0.98}, {duration:1.2, y:0, rotateX:0, scale:1, ease:'expo.out'}, 0.2)
+        .fromTo(cake, {z: -160, opacity:0}, {duration:1.1, z:0, opacity:1, ease:'power4.out'}, 0.25)
+        .fromTo(knife, {y:-200, opacity:0}, {duration:1.1, y:0, opacity:1, ease:'elastic.out(1,0.6)'}, 0.65);
+    }
+
+    // 触发上滑：监听 Lenis scroll 或 touch
+    let startY=null;
+    window.addEventListener('wheel', (e)=> {
+      if(opened) return;
+      if(e.deltaY > 0) openCurtain();
+    }, {passive:true});
+    // 触屏上滑
+    window.addEventListener('touchstart',(e)=>{ if(e.touches[0]) startY = e.touches[0].clientY }, {passive:true});
+    window.addEventListener('touchend',(e)=>{ if(!opened && startY !== null){ const endY = e.changedTouches[0].clientY; if(startY-endY > 40) openCurtain(); startY=null } }, {passive:true});
+
+    // -------------- 视差（设备陀螺） --------------
+    // 设计意图：微弱视差提升“悬浮感”，避免过度使用户晕动
+    window.addEventListener('deviceorientation', (ev)=>{
+      if(!ev.gamma && !ev.beta) return;
+      const gx = ev.gamma || 0; // 左右
+      const by = ev.beta || 0; // 上下
+      const maxTilt = 6;
+      const tx = (gx/90) * maxTilt;
+      const ty = (by/90) * maxTilt;
+      gsapInstance.to(scene, {duration:0.8, rotationY: tx, rotationX: -ty, transformOrigin:'50% 50%', ease:'power2.out', overwrite:true});
+    }, {passive:true});
+
+    // 鼠标 / 指针视差（桌面）
+    document.addEventListener('pointermove', (e)=>{
+      const rect = document.body.getBoundingClientRect();
+      const cx = rect.width/2, cy = rect.height/2;
+      const dx = (e.clientX - cx)/cx;
+      const dy = (e.clientY - cy)/cy;
+      gsapInstance.to(scene, {duration:1.2, rotationY: dx * 4, rotationX: dy * 3, ease:'power3.out'});
+    });
+
+    // -------------- 蜡烛交互：长按 + 吹气检测 --------------
+    // 设计意图：长按或吹气都会驱动火焰 filter 动画（被风吹歪 -> 拉长 -> 冒烟 -> 熄灭）
+    let longPressTimer = null;
+    const candleEls = document.querySelectorAll('.candle');
+    candleEls.forEach(cand => {
+      cand.addEventListener('pointerdown', (e)=> {
+        e.preventDefault();
+        cand.setPointerCapture(e.pointerId);
+        longPressTimer = setTimeout(()=> triggerBlow(cand), 700); // 700ms 长按触发
+      });
+      cand.addEventListener('pointerup', (e)=> {
+        if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer=null }
+        try{ cand.releasePointerCapture(e.pointerId) }catch(e){}
+      });
+      // 键盘可访问性：回车触发
+      cand.addEventListener('keydown', (e)=>{ if(e.key === 'Enter' || e.key === ' ') triggerBlow(cand) });
+    });
+
+    // 吹气检测（麦克风）：简化策略——测量即时音量峰值
+    let audioStream = null;
+    let audioCtx = null;
+    let analyser = null;
+    async function startMic(){
+      if(!navigator.mediaDevices || audioStream) return;
+      try{
+        audioStream = await navigator.mediaDevices.getUserMedia({audio:true});
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(audioStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        function sample(){
+          analyser.getByteFrequencyData(data);
+          let sum=0;
+          for(let i=0;i<data.length;i++) sum+=data[i];
+          const avg = sum/data.length;
+          // 设计意图：阈值选取用于检测“吹气”瞬时峰值
+          if(avg > 32 && flamesOn){ // 值可调整
+            // 触发吹灭（随机选择一支点燃的蜡烛）
+            const lit = Array.from(document.querySelectorAll('.candle')).filter(c=> c.dataset.lit !== 'false');
+            if(lit.length>0){
+              triggerBlow(lit[Math.floor(Math.random()*lit.length)]);
+            }
+          }
+          requestAnimationFrame(sample);
+        }
+        sample();
+      }catch(e){ /* 用户拒绝麦克风，降级为长按 */ }
+    }
+    // 自动尝试启动麦克风（延迟以避免在浏览器阻止自动获取）
+    setTimeout(()=>startMic(), 1200);
+
+    function triggerBlow(candleEl){
+      if(!flamesOn) return;
+      // 设计意图：火焰先被wind拉伸并扭曲（改变 feTurbulence/feDisplacementMap），然后冒烟，最后 fade out
+      const turb = document.getElementById('turb');
+      const disp = document.getElementById('disp');
+      // 动态增加噪声频率与 displacement scale
+      gsapInstance.timeline()
+        .to(turb, {duration:0.22, attr:{baseFrequency:'0.06 0.12'}, ease:'power2.out'})
+        .to(disp, {duration:0.28, attr:{scale:44}, ease:'power2.out'}, 0)
+        .to('#flameGroup', {duration:0.28, scaleY:1.6, transformOrigin:'50% 80%', ease:'power3.out'}, 0)
+        .to('#flameGroup', {duration:0.6, scaleY:0.4, opacity:0, ease:'power2.in', delay:0.28, onComplete: ()=>{
+          // 隐藏该蜡烛火焰（模拟熄灭）
+          candleEl.dataset.lit = 'false';
+          // 发射烟雾粒子
+          const rect = candleEl.getBoundingClientRect();
+          emitSmoke(rect.left + rect.width/2, rect.top + 8);
+          // 屏幕边缘气流模糊短暂出现
+          gloom.classList.add('active');
+          setTimeout(()=>gloom.classList.remove('active'), 1200);
+          // 如果所有蜡烛熄灭，进入下一个阶段（出现餐刀并可切蛋糕）
+          const remaining = Array.from(document.querySelectorAll('.candle')).some(c=> c.dataset.lit !== 'false');
+          if(!remaining){
+            flamesOn=false;
+            showKnife();
+          }
+        }});
+      // 设计意图：轻微的台面亮度变化，模拟色温突变
+      gsapInstance.to(document.documentElement, {duration:0.6, '--temp': '#9fb6d3', onUpdate: ()=>{
+        // 可以实际修改页面色彩或滤镜以模拟冷光
+        document.body.style.filter = 'saturate(0.94) hue-rotate(-6deg) contrast(0.98)';
+      }});
+    }
+
+    // 初始点火（让火焰有生命感）
+    function idleFlame(){
+      gsapInstance.to('#turb', {duration:2.6, attr:{baseFrequency:'0.016 0.03'}, repeat:-1, yoyo:true, ease:'sine.inOut'});
+      gsapInstance.to('#disp', {duration:3.2, attr:{scale:9}, repeat:-1, yoyo:true, ease:'sine.inOut'});
+      gsapInstance.to('#flameGroup', {duration:2.2, scaleY:1.05, transformOrigin:'50% 80%', repeat:-1, yoyo:true, ease:'sine.inOut'});
+      // 标记蜡烛为点燃状态
+      candleEls.forEach(c=> c.dataset.lit = 'true');
+    }
+    idleFlame();
+
+    // -------------- 刀具与切蛋糕逻辑 --------------
+    // 设计意图：餐刀从悬浮转入，用户下滑进行切入，切面使用 clip-path 分割并露出内层渐变
+    function showKnife(){
+      gsapInstance.to(knife, {duration:0.9, y:-8, opacity:1, ease:'elastic.out(1,0.5)'});
+      hint.textContent = "向下滑动餐刀以切蛋糕 · 共 3 刀";
+      enableKnifeDrag();
+    }
+
+    function enableKnifeDrag(){
+      let dragging=false, startY=null;
+      knife.addEventListener('pointerdown', (e)=>{
+        dragging=true; startY = e.clientY;
+        knife.setPointerCapture(e.pointerId);
+      });
+      window.addEventListener('pointermove', (e)=>{
+        if(!dragging) return;
+        const dy = e.clientY - startY;
+        if(dy > 0){ // 向下移动
+          gsapInstance.set(knife, {y: Math.min(dy, 320)});
+        }
+      });
+      window.addEventListener('pointerup', (e)=>{
+        if(!dragging) return;
+        const dy = parseFloat(gsap.getProperty(knife,'y')) || 0;
+        // 判定切入阈值
+        if(dy > 110){
+          performCut();
+          navigator.vibrate && navigator.vibrate(28); // 设计意图：轻微触觉反馈
+        }
+        // 重置刀子
+        gsap.to(knife, {duration:0.45, y:0, ease:'power3.out'});
+        dragging=false; startY=null;
+      });
+    }
+
+    function performCut(){
+      cuts++;
+      // 在每次切割时把 cake .inner 的 clip-path 缩小并移动以模拟切开一片
+      // 设计意图：使用双层元素和 clip-path 动画实现真实的切面分离
+      const inner = document.getElementById('cakeInner');
+      const slice = document.createElement('div');
+      slice.style.position='absolute';
+      slice.style.left='50%'; slice.style.top='28px';
+      slice.style.transform='translateX(-50%)';
+      slice.style.width = inner.style.width || '84%';
+      slice.style.height='56px';
+      slice.style.borderRadius='40px/22px';
+      slice.style.overflow='hidden';
+      slice.style.background='linear-gradient(180deg,#ffd9d4 0%, #ffbdb3 100%)';
+      slice.style.boxShadow='0 8px 28px rgba(0,0,0,0.45)';
+      slice.style.pointerEvents='none';
+      slice.className='slice';
+      cake.appendChild(slice);
+
+      // animate: 切片抬起并移向一侧，露出内层草莓纹理
+      const dir = (cuts % 2 === 0) ? -1 : 1;
+      gsap.timeline()
+        .to(slice, {duration:0.45, y:-26, rotationZ: dir*2, x: dir*42, ease:'power2.out'})
+        .to(slice, {duration:0.6, y:22, rotationZ: dir*6, ease:'bounce.out', delay:0.02})
+        .to(slice, {duration:0.9, opacity:0, onComplete: ()=> {
+          slice.remove();
+          // 替换蛋糕 inner 为显示更多草莓夹心（逐渐换色）
+          gsap.fromTo(inner, {scale:0.98, filter:'brightness(1.02)'}, {duration:0.6, scale:1, filter:'brightness(1)', ease:'power2.out'});
+        }});
+
+      // 震动与音效
+      navigator.vibrate && navigator.vibrate(12);
+
+      if(cuts >= totalCuts){
+        // 完成切割：露出信封
+        revealEnvelope();
+      }
+    }
+
+    // -------------- 信封与信纸交互 --------------
+    function revealEnvelope(){
+      // 设计意图：蛋糕移开后显示隐藏在盘下的信封（此处直接突出 envelope）
+      gsap.to(envelope, {duration:0.9, y:-28, scale:1.02, ease:'elastic.out(1,0.5)'});
+      hint.textContent = "点击信封查看祝福";
+      envelope.addEventListener('click', openEnvelopeOnce, {once:true});
+    }
+
+    function openEnvelopeOnce(){
+      // 3D 翻转信封 + 火漆碎裂粒子
+      gsap.timeline()
+        .to(envelope, {duration:0.6, rotationX: -180, transformOrigin:'50% 50%', ease:'power3.inOut'})
+        .to(envelope, {duration:0.6, opacity:0, onComplete: ()=> envelope.style.display='none'}, 0.55);
+      // 火漆碎裂粒子（canvas）
+      emitSealParticles();
+      // 抽出信纸
+      gsap.to(paper, {duration:0.9, y:-180, height:360, ease:'elastic.out(1,0.6)', delay:0.4, onComplete: ()=> {
+        // 打字与墨迹晕染效果
+        typeMessage();
+      }});
+    }
+
+    function emitSealParticles(){
+      // 使用纸上方位置生成一些碎裂红色小片
+      const rect = envelope.getBoundingClientRect();
+      const cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+      const ctx = smokeCtx; // 复用 smoke canvas
+      const particles = [];
+      for(let i=0;i<28;i++){
+        particles.push({
+          x: cx*devicePixelRatio + (Math.random()-0.5)*24,
+          y: cy*devicePixelRatio + (Math.random()-0.5)*12,
+          vx:(Math.random()-0.5)*2.6,
+          vy:(Math.random()-0.5)*2.6 - 1.8,
+          life:60 + Math.random()*60,
+          r:2 + Math.random()*6,
+          color: `rgba(${180+Math.floor(Math.random()*60)}, ${40+Math.floor(Math.random()*20)}, ${35+Math.floor(Math.random()*20)}, 1)`
+        });
+      }
+      let t=0;
+      function draw(){
+        resizeCanvas(smokeCanvas);
+        ctx.clearRect(0,0,smokeCanvas.width,smokeCanvas.height);
+        let alive=false;
+        for(let p of particles){
+          if(p.life>0){
+            alive=true; p.x+=p.vx; p.y+=p.vy; p.vy+=0.04; p.life--;
+            ctx.fillStyle = p.color.replace(', 1)', `, ${Math.max(0, p.life/80)})`);
+            ctx.beginPath(); ctx.ellipse(p.x,p.y,p.r,p.r*1.2,0,0,Math.PI*2); ctx.fill();
+          }
+        }
+        if(alive && t < 160){ t++; requestAnimationFrame(draw) }
+        else { ctx.clearRect(0,0,smokeCanvas.width,smokeCanvas.height) }
+      }
+      draw();
+    }
+
+    // 打字机 + 墨迹晕染
+    const finalText = `亲爱的 郭依琳：
+
+愿你像这烛光温柔、像奶油那样香甜、像星云那样自由。每一年的今天，我都为你点亮一盏小灯，愿你在未来的日子里被温柔相待、被世界拥抱。
+
+爱你的朋友 敬上
+
+坐标：20070723 | 永远为你留灯`; // 特别彩蛋已加入末尾
+
+    function typeMessage(){
+      // 设计意图：逐字显示并在每个笔画结束时在 inkCanvas 上画一点墨迹晕染
+      message.textContent = "";
+      // 设置 inkCanvas 大小
+      resizeCanvas(inkCanvas);
+      const ic = inkCanvas.getContext('2d');
+      ic.clearRect(0,0,inkCanvas.width,inkCanvas.height);
+      ic.scale(devicePixelRatio, devicePixelRatio);
+
+      let idx=0;
+      function step(){
+        if(idx >= finalText.length) return;
+        const ch = finalText[idx++];
+        message.textContent += ch;
+        // 每显示若干字符（或换行）做一次墨迹晕染
+        if(Math.random() < 0.15 || ch === '\n'){
+          // 在 message 内随机位置生成一小坨墨迹，模拟手写晕染
+          const mRect = message.getBoundingClientRect();
+          const x = Math.random() * (mRect.width - 40) + 20;
+          const y = Math.random() * (mRect.height - 40) + 20;
+          // canvas 上画模糊圆
+          const radius = 6 + Math.random()*10;
+          const grad = ic.createRadialGradient(x*devicePixelRatio, y*devicePixelRatio, 0, x*devicePixelRatio, y*devicePixelRatio, radius*devicePixelRatio);
+          grad.addColorStop(0, 'rgba(30,30,30,0.95)');
+          grad.addColorStop(1, 'rgba(30,30,30,0)');
+          ic.fillStyle = grad;
+          ic.beginPath(); ic.arc(x*devicePixelRatio, y*devicePixelRatio, radius*devicePixelRatio, 0, Math.PI*2); ic.fill();
+          // 轻微扩散动画
+          gsap.to(inkCanvas, {duration:0.9, opacity:0.9, ease:'sine.inOut'});
+        }
+        // typing rhythm: 打字机声音合成
+        tinyClick();
+        // 逐字延迟（可变）
+        setTimeout(step, 42 + Math.random()*58);
+      }
+      // 触发打字
+      step();
+      // 文字渲染完成后把末尾的彩蛋文本微调为极淡极小字号
+      setTimeout(()=> {
+        // 说明：把彩蛋最后一行重新渲染为极小淡色
+        const full = message.textContent;
+        // 将最后一行替换：在 DOM 中重写 message 的最后一行为带样式的小文本
+        const parts = full.split('\n');
+        const last = parts.pop();
+        message.textContent = parts.join('\n') + '\n';
+        const span = document.createElement('span');
+        span.textContent = last;
+        span.style.fontSize='10px'; span.style.color='rgba(15,15,15,0.08)'; span.style.letterSpacing='0.06em';
+        message.appendChild(span);
+      }, 5000);
+    }
+
+    function tinyClick(){
+      // 使用 WebAudio 简短合成模拟打字机“卡嗒”声
+      try{
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type='square'; o.frequency.value = 700 + Math.random()*200;
+        g.gain.value = 0.0001;
+        o.connect(g); g.connect(ctx.destination);
+        o.start();
+        gsap.to(g.gain, {value:0.08, duration:0.002, yoyo:true, repeat:1});
+        gsap.to(g.gain, {value:0, duration:0.08, delay:0.06, onComplete: ()=> { o.stop(); ctx.close() }});
+      }catch(e){}
+    }
+
+    // -------------- 初始化与事件绑定 --------------
+    window.addEventListener('resize', ()=>{ initStars(); initSmoke(); resizeCanvas(inkCanvas) });
+    initStars(); initSmoke(); resizeCanvas(inkCanvas);
+
+    // 开启交互提示隐藏的启幕部分（第一个 scroll 或手势触发）
+    hint.addEventListener('click', openCurtain);
+
+    // 如果用户点击页面任意处并且未打开遮幕，则打开
+    document.addEventListener('click', (e)=>{ if(!opened) openCurtain(); }, {once:true});
+
+    // 初始桌面微小呼吸动画，提升质感
+    gsap.to(table, {duration:6, scale:1.006, repeat:-1, yoyo:true, ease:'sine.inOut'});
+
+    // 页面加载后 1 秒提示开始麦克风访问（非强制）
+    setTimeout(()=> {
+      // 给移动端用户一个提示：对着屏幕轻吹或允许麦克风以体验吹蜡烛
+      // （我们已经在 startMic 中尝试过一次）
+    }, 1200);
+
+    // 防止滚动导致触发页面滚动时出现卡顿，使用 lenis 来平滑
+    // Lenis 已经在 raf 中启动
+
+    // -------------- 设计意图注释示例（代码段）--------------
+    // // 此处阴影模糊值设为20px，模拟烛光下的漫反射
+    // // 蛋糕顶部的径向渐变半径和位置决定高光强度与刷痕方向，可微调以改变奶油质感
+
+    // -------------- 小提示：如果需要微调 --------------
+    // 你可以在 CSS 中调整 .cake .top 的径向渐变、伪元素大小与 blur 来微调奶油厚重感；
+    // 调整 SVG filter 的 feTurbulence.baseFrequency 与 feDisplacementMap.scale 可让火焰更狂野或更柔和。
+
+  </script>
+</body>
+</html>

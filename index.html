@@ -1,4 +1,3 @@
-<!-- index.html -->
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -9,6 +8,22 @@
   <!-- GSAP 3.12+ CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" defer></script>
   <script src="main.js" defer></script>
+
+  <!-- 局部样式：女孩（分层 SVG）及表情/拖拽样式 -->
+  <style>
+    /* Girl container on the table */
+    .table { position:relative; display:flex; align-items:flex-end; justify-content:center; }
+    .girl {
+      position:absolute; right:12%; bottom:36px; width:160px; height:320px; z-index:40; touch-action:none;
+      transform-origin:50% 100%; will-change:transform;
+    }
+    .girl svg { width:160px; height:320px; display:block; }
+    .girl-shadow { position:absolute; right:14%; bottom:8px; width:120px; height:28px; border-radius:50%; background:radial-gradient(ellipse at center, rgba(0,0,0,0.32), rgba(0,0,0,0.12)); filter:blur(6px); z-index:30 }
+    /* interaction cursor feedback */
+    .girl:active { cursor:grabbing }
+    /* small utility for hiding default outline on focusable elements */
+    .girl:focus { outline:none }
+  </style>
 </head>
 <body>
   <div id="app" class="scene">
@@ -66,6 +81,109 @@
             <!-- 内部夹心：默认隐藏，通过 clip-path 展示 -->
             <div class="cake-fill" aria-hidden="true"></div>
           </div>
+
+          <!-- 女孩（分层 SVG，带厨师帽） -->
+          <div class="girl" id="girl" role="img" aria-label="Q版女孩子">
+            <svg viewBox="0 0 240 480" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+              <defs>
+                <linearGradient id="hairGrad" x1="0" x2="1">
+                  <stop offset="0%" stop-color="#4a2f2f"/>
+                  <stop offset="100%" stop-color="#2b1b1b"/>
+                </linearGradient>
+                <linearGradient id="skinGrad" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stop-color="#fff0e9"/>
+                  <stop offset="100%" stop-color="#ffe6dd"/>
+                </linearGradient>
+                <radialGradient id="eyeGrad" cx="30%" cy="30%">
+                  <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+                  <stop offset="40%" stop-color="#6f3b3b"/>
+                  <stop offset="100%" stop-color="#2a0f0f"/>
+                </radialGradient>
+                <filter id="softShadow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.25"/>
+                </filter>
+              </defs>
+
+              <!-- shadow beneath girl (separate element for subtle contact) -->
+              <g id="girlRoot" transform="translate(20,20)">
+                <!-- body / dress -->
+                <g id="dress" transform="translate(40,220)">
+                  <path d="M20 8 q40 120 80 0 q40 -120 80 0 q0 40 -80 40 q-80 0 -80 -40z" fill="#fbeef8" stroke="#f2dbe8" stroke-width="1"/>
+                  <ellipse cx="120" cy="120" rx="60" ry="24" fill="#fff3f8" opacity="0.7" />
+                </g>
+
+                <!-- legs simplified -->
+                <g id="legs" transform="translate(110,360)">
+                  <rect x="-16" y="0" width="14" height="28" rx="6" fill="#f5d7d7"/>
+                  <rect x="6" y="0" width="14" height="28" rx="6" fill="#f5d7d7"/>
+                </g>
+
+                <!-- head group -->
+                <g id="headGroup" transform="translate(30,50)">
+                  <!-- hair back -->
+                  <path id="hairBack" d="M10 30 q40 -80 120 -10 q20 40 -20 100 q-40 60 -80 10 q-20 -40 -20 -100z" fill="url(#hairGrad)"/>
+
+                  <!-- face -->
+                  <g id="face" transform="translate(40,40)">
+                    <ellipse cx="80" cy="70" rx="52" ry="56" fill="url(#skinGrad)" stroke="#f2d6d0" stroke-width="1.2"/>
+
+                    <!-- cheeks -->
+                    <ellipse cx="58" cy="88" rx="8" ry="5" fill="#ffd6de" opacity="0.9"/>
+                    <ellipse cx="102" cy="88" rx="8" ry="5" fill="#ffd6de" opacity="0.9"/>
+
+                    <!-- eyes group -->
+                    <g id="eyes" transform="translate(28,56)">
+                      <!-- left eye -->
+                      <g id="eyeL">
+                        <ellipse class="eye-sclera" cx="12" cy="0" rx="12" ry="14" fill="#ffffff"/>
+                        <ellipse class="iris" cx="12" cy="-1" rx="8" ry="10" fill="url(#eyeGrad)"/>
+                        <circle class="eye-glow" cx="8" cy="-6" r="2.6" fill="#fff" opacity="0.95"/>
+                      </g>
+                      <!-- right eye -->
+                      <g id="eyeR" transform="translate(60,0)">
+                        <ellipse class="eye-sclera" cx="12" cy="0" rx="12" ry="14" fill="#ffffff"/>
+                        <ellipse class="iris" cx="12" cy="-1" rx="8" ry="10" fill="url(#eyeGrad)"/>
+                        <circle class="eye-glow" cx="8" cy="-6" r="2.6" fill="#fff" opacity="0.95"/>
+                      </g>
+                    </g>
+
+                    <!-- nose subtle -->
+                    <path d="M88 86 q0 4 4 4" stroke="#e4bfb9" stroke-width="1" fill="none" stroke-linecap="round"/>
+
+                    <!-- mouth: two states (normal / puff / chew) realized by group transforms -->
+                    <g id="mouthGroup" transform="translate(0,118)">
+                      <g id="mouthNormal">
+                        <path d="M74 6 q6 6 18 0" stroke="#b55b60" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+                      </g>
+                      <g id="mouthPuff" transform="scale(1,1)" opacity="0">
+                        <ellipse cx="84" cy="8" rx="8" ry="6" fill="#f07f8b"/>
+                      </g>
+                      <g id="mouthChew" opacity="0">
+                        <path d="M70 6 q14 12 28 0 q-14 6 -28 0" fill="#f27f89" opacity="0.95"/>
+                      </g>
+                    </g>
+
+                    <!-- hair front / bangs -->
+                    <g id="hairFront">
+                      <path d="M40 28 q30 -20 60 2 q6 4 12 18 q-10 30 -36 40 q-26 10 -44 -6 q-4 -12 -6 -32 q4 -12 10 -22z" fill="url(#hairGrad)"/>
+                    </g>
+
+                    <!-- chef hat (参考图保留) -->
+                    <g id="chefHat" transform="translate(10,-36)">
+                      <path d="M40 12 q40 -36 80 0 q0 20 -40 22 q-40 -2 -40 -22z" fill="#fff" stroke="#efecec" stroke-width="1.2"/>
+                      <rect x="58" y="-2" width="44" height="12" rx="6" fill="#fff" stroke="#efecec" stroke-width="1"/>
+                    </g>
+
+                  </g>
+                </g>
+
+              </g>
+            </svg>
+          </div>
+
+          <!-- subtle contact shadow -->
+          <div class="girl-shadow" aria-hidden="true"></div>
+
         </div>
       </div>
 
@@ -106,5 +224,130 @@
 
     <!-- SVG defs only (for possible future use) -->
   </div>
+
+  <!-- 局部脚本：女孩表情与拖拽（使用 GSAP） -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      const girl = document.getElementById('girl');
+      const mouthNormal = document.getElementById('mouthNormal');
+      const mouthPuff = document.getElementById('mouthPuff');
+      const mouthChew = document.getElementById('mouthChew');
+      const hairFront = document.getElementById('hairFront');
+      const hairBack = document.getElementById('hairBack');
+      const headGroup = document.getElementById('headGroup');
+
+      // idle subtle breathing (head slight up/down) and hair gentle sway
+      gsap.to(girl, { y: -6, duration:2.6, yoyo:true, repeat:-1, ease:'sine.inOut' });
+      gsap.to(hairFront, { rotation:1.6, transformOrigin:'50% 50%', duration:2.2, yoyo:true, repeat:-1, ease:'sine.inOut' });
+      gsap.to(hairBack, { rotation:-1.6, transformOrigin:'50% 50%', duration:3.2, yoyo:true, repeat:-1, ease:'sine.inOut' });
+
+      // blink timeline
+      function blink(){
+        gsap.timeline()
+          .to('#eyeL .iris, #eyeR .iris', { scaleY:0.08, transformOrigin:'50% 50%', duration:0.08 })
+          .to('#eyeL .iris, #eyeR .iris', { scaleY:1, duration:0.08, delay:0.12 });
+      }
+      setInterval(blink, 3200 + Math.random()*2600);
+
+      // mouth states helpers
+      function setMouth(state){
+        // state: 'normal'|'puff'|'chew'
+        if(state==='normal'){
+          gsap.to(mouthNormal, { opacity:1, duration:0.18 });
+          gsap.to([mouthPuff, mouthChew], { opacity:0, duration:0.18 });
+        } else if(state==='puff'){
+          gsap.to(mouthPuff, { opacity:1, duration:0.12 });
+          gsap.to(mouthNormal, { opacity:0, duration:0.12 });
+          gsap.to(mouthChew, { opacity:0, duration:0.12 });
+        } else if(state==='chew'){
+          gsap.to(mouthChew, { opacity:1, duration:0.08 });
+          gsap.to([mouthNormal, mouthPuff], { opacity:0, duration:0.08 });
+        }
+      }
+
+      // drag handling with inertia
+      let dragging=false, start={x:0,y:0}, pos={x:0,y:0}, vel={x:0,y:0};
+
+      function getPoint(e){
+        if(e.touches && e.touches[0]) return { x:e.touches[0].clientX, y:e.touches[0].clientY };
+        return { x:e.clientX, y:e.clientY };
+      }
+
+      girl.addEventListener('touchstart', startDrag, {passive:false});
+      girl.addEventListener('mousedown', startDrag);
+
+      function startDrag(e){
+        e.preventDefault();
+        dragging=true;
+        const p = getPoint(e);
+        start.x = p.x - pos.x; start.y = p.y - pos.y;
+        gsap.killTweensOf(girl);
+      }
+      window.addEventListener('touchmove', doDrag, {passive:false});
+      window.addEventListener('mousemove', doDrag);
+
+      function doDrag(e){
+        if(!dragging) return;
+        const p = getPoint(e);
+        const nx = p.x - start.x; const ny = p.y - start.y;
+        // clamp within reasonable area near table
+        const minX = -40, maxX = 140; const minY = -20, maxY = 60;
+        pos.x = Math.min(maxX, Math.max(minX, nx/1.8));
+        pos.y = Math.min(maxY, Math.max(minY, ny/6));
+        gsap.set(girl, { x: pos.x, y: pos.y, rotation: pos.x/18 });
+        // hair lively
+        gsap.to(hairFront, { rotation: (pos.x/18), duration:0.2 });
+        // detect proximity to candle -> puff
+        checkProximityForPuff();
+      }
+
+      window.addEventListener('touchend', endDrag); window.addEventListener('mouseup', endDrag);
+      function endDrag(e){
+        dragging=false;
+        // inertia effect
+        gsap.to(girl, { duration:1.1, x:0, y:0, rotation:0, ease:'elastic.out(1,0.6)' });
+        gsap.to(hairFront, { rotation:1.6, duration:1.6, ease:'sine.inOut' });
+        setMouth('normal');
+      }
+
+      // simple proximity check between girl mouth and candle
+      function checkProximityForPuff(){
+        const girlRect = girl.getBoundingClientRect();
+        const candle = document.getElementById('candle');
+        if(!candle) return;
+        const candleRect = candle.getBoundingClientRect();
+        const girlMouthPoint = { x: girlRect.left + girlRect.width*0.45, y: girlRect.top + girlRect.height*0.45 };
+        const cx = candleRect.left + candleRect.width*0.5, cy = candleRect.top + candleRect.height*0.3;
+        const dx = girlMouthPoint.x - cx, dy = girlMouthPoint.y - cy;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if(dist < 78){
+          // puff state and slight head lean forward
+          setMouth('puff');
+          gsap.to(girl, { duration:0.28, y: '-=6', x: '-=6', ease:'power2.out' });
+          // trigger candle extinguish: dispatch custom event
+          document.dispatchEvent(new CustomEvent('girlPuff'));
+        } else {
+          setMouth('normal');
+        }
+      }
+
+      // listen to external events (main.js may listen too)
+      document.addEventListener('triggerChew', ()=>{
+        // chew animation sequence: three quick chews
+        let chewT = gsap.timeline();
+        chewT.to({}, {duration:0.06, onStart:()=>setMouth('chew')})
+             .to({}, {duration:0.28, onComplete:()=>setMouth('normal')})
+             .to({}, {duration:0.06, onStart:()=>setMouth('chew')})
+             .to({}, {duration:0.28, onComplete:()=>setMouth('normal')})
+             .to({}, {duration:0.06, onStart:()=>setMouth('chew')})
+             .to({}, {duration:0.28, onComplete:()=>setMouth('normal')});
+      });
+
+      // small polish: when user taps girl quickly, give a tiny hop
+      girl.addEventListener('click', (e)=>{ gsap.fromTo(girl, {scale:1}, {scale:1.04, duration:0.12, yoyo:true, repeat:1, ease:'power1.inOut'}); });
+
+    });
+  </script>
+
 </body>
 </html>
